@@ -11,6 +11,8 @@ import image_transforms
 import open3d
 import time
 
+SAV_PATH = '/home/wdebang/hdd/vmap/segmented/'
+
 def next_live_data(track_to_map_IDT, inited):
     while True:
         if track_to_map_IDT.empty():
@@ -74,6 +76,7 @@ class Replica(Dataset):
         self.background_cls_list = [5,12,30,31,40,60,92,93,95,97,98,79]
         # Not sure: door-37 handrail-43 lamp-47 pipe-62 rack-66 shower-stall-73 stair-77 switch-79 wall-cabinet-94 picture-59
         self.bbox_scale = 0.2  # 1 #1.5 0.9== s=1/9, s=0.2
+        self.save_seg = [True] * len(self)
 
     def __len__(self):
         return len(os.listdir(os.path.join(self.root_dir, "depth")))
@@ -129,6 +132,23 @@ class Replica(Dataset):
 
             inst[obj_ == 0] = 0  # for background
             obj = inst
+
+            if self.save_seg[idx]:
+                path = SAV_PATH + str(idx) + '/'
+                os.makedirs(path, exist_ok=True)
+                bg = image.copy()
+                bg_mask = np.full_like(bg, fill_value=255)
+                bg_mask[obj_ == 0] = 0
+                bg = cv2.cvtColor(bg, cv2.COLOR_RGB2BGR).transpose(1,0,2)
+                bg_mask = bg_mask.transpose(1,0,2)
+                cv2.imwrite(path + "bg.png", bg)
+                cv2.imwrite(path + "bg_mask.png", bg_mask)
+                for i, obj_mask in enumerate(batch_masks):
+                    _obj = image.copy()
+                    _obj[~obj_mask] = [255,255,255]
+                    _obj = cv2.cvtColor(_obj, cv2.COLOR_RGB2BGR).transpose(1,0,2)
+                    cv2.imwrite(path + f'obj_{i}' + ".png", _obj)
+                self.save_seg[idx] = False
 
         bbox_dict.update({0: torch.from_numpy(np.array([int(0), int(obj.shape[0]), 0, int(obj.shape[1])]))})  # bbox order
 
@@ -290,3 +310,11 @@ class ScanNet(Dataset):
         sample.update({"obj": inst_data.transpose(1,0)})
         sample.update({"bbox_dict": bbox_dict})
         return sample
+
+if __name__ == '__main__':
+    from cfg import Config
+    config_file = "/home/wdebang/workspace/vMAP/configs/Replica/config_replica_room0_vMAP.json"
+    cfg = Config(config_file)
+    ds = Replica(cfg)
+    print(len(ds))
+    ds[1]

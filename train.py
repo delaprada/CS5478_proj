@@ -9,6 +9,7 @@ from functorch import vmap
 import argparse
 from cfg import Config
 import shutil
+import pdb
 
 if __name__ == "__main__":
     #############################################
@@ -26,6 +27,8 @@ if __name__ == "__main__":
     parser.add_argument('--save_ckpt',
                         default=False,
                         type=bool)
+    parser.add_argument('--no_vis',
+                        action='store_true')
     args = parser.parse_args()
 
     log_dir = args.logdir
@@ -36,16 +39,16 @@ if __name__ == "__main__":
     cfg = Config(config_file)       # config params
     n_sample_per_step = cfg.n_per_optim
     n_sample_per_step_bg = cfg.n_per_optim_bg
-
     # param for vis
-    vis3d = open3d.visualization.Visualizer()
-    vis3d.create_window(window_name="3D mesh vis",
-                        width=cfg.W,
-                        height=cfg.H,
-                        left=600, top=50)
-    view_ctl = vis3d.get_view_control()
-    view_ctl.set_constant_z_far(10.)
-
+    if not args.no_vis:
+        vis3d = open3d.visualization.Visualizer()
+        vis3d.create_window(window_name="3D mesh vis",
+                            width=cfg.W,
+                            height=cfg.H,
+                            left=600, top=50)
+        view_ctl = vis3d.get_view_control()
+        view_ctl.set_constant_z_far(10.)
+    # print('there')
     # set camera
     cam_info = cameraInfo(cfg)
     intrinsic_open3d = open3d.camera.PinholeCameraIntrinsic(
@@ -135,6 +138,7 @@ if __name__ == "__main__":
                         state = torch.zeros_like(inst_mask, dtype=torch.uint8, device=cfg.data_device)
                         state[inst_mask == obj_id] = 1
                         state[inst_mask == -1] = 2
+                    # pdb.set_trace()
                     bbox = bbox_dict[obj_id]
                     if obj_id in vis_dict.keys():
                         scene_obj = vis_dict[obj_id]
@@ -342,7 +346,8 @@ if __name__ == "__main__":
         # live vis mesh
         if (((frame_id % cfg.n_vis_iter) == 0 or frame_id == dataset_len-1) or
             (cfg.live_mode and time.time()-last_frame_time>cfg.keep_live_time)) and frame_id >= 10:
-            vis3d.clear_geometries()
+            if not args.no_vis:
+                vis3d.clear_geometries()
             for obj_id, obj_k in vis_dict.items():
                 bound = obj_k.get_bound(intrinsic_open3d)
                 if bound is None:
@@ -361,11 +366,12 @@ if __name__ == "__main__":
 
                 # live vis
                 open3d_mesh = vis.trimesh_to_open3d(mesh)
-                vis3d.add_geometry(open3d_mesh)
-                vis3d.add_geometry(bound)
-                # update vis3d
-                vis3d.poll_events()
-                vis3d.update_renderer()
+                if not args.no_vis:
+                    vis3d.add_geometry(open3d_mesh)
+                    vis3d.add_geometry(bound)
+                    # update vis3d
+                    vis3d.poll_events()
+                    vis3d.update_renderer()
 
         if False:    # follow cam
             cam = view_ctl.convert_to_pinhole_camera_parameters()
