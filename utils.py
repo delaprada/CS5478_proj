@@ -7,6 +7,7 @@ import open3d
 import queue
 import copy
 import torch.utils.dlpack
+import pdb
 
 class BoundingBox():
     def __init__(self):
@@ -28,10 +29,16 @@ def bbox_bbox2open3d(bbox):
     return bbox_o3d
 
 def update_vmap(models, optimiser):
-    fmodel, params, buffers = combine_state_for_ensemble(models)
-    [p.requires_grad_() for p in params]
-    optimiser.add_param_group({"params": params})  # imap b l
-    return (fmodel, params, buffers)
+    # fmodel, params, buffers = combine_state_for_ensemble(models)
+    params, buffers = torch.func.stack_module_state(models)
+    # params = tuple(params.values())
+    # buffers = tuple(buffers.values())
+    # pdb.set_trace()
+    # [p.requires_grad_() for p in params]
+    # optimiser.add_param_group({"params": params})  # imap b l
+    optimiser.add_param_group({"params": tuple(params.values())})  # imap b l
+    # return (fmodel, params, buffers)
+    return params, buffers
 
 def enlarge_bbox(bbox, scale, w, h):
     assert scale >= 0

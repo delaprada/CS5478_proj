@@ -1,3 +1,5 @@
+from email.mime import base
+from multiprocessing.managers import BaseManager
 import time
 import loss
 from vmap import *
@@ -5,8 +7,9 @@ import utils
 import open3d
 import dataset
 import vis
-from functorch import vmap
+from torch import vmap
 import argparse
+import copy
 from cfg import Config
 import shutil
 import pdb
@@ -16,7 +19,7 @@ if __name__ == "__main__":
     # init config
     torch.backends.cudnn.enabled = True
     torch.backends.cudnn.benchmark = True
-
+    base_models = []
     # setting params
     parser = argparse.ArgumentParser(description='Model training for single GPU')
     parser.add_argument('--logdir', default='./logs/debug',
@@ -166,6 +169,16 @@ if __name__ == "__main__":
                                 update_vmap_model = True
                                 fc_models.append(obj_dict[obj_id].trainer.fc_occ_map)
                                 pe_models.append(obj_dict[obj_id].trainer.pe)
+                                if len(base_models) == 0:
+                                    base_models.append(
+                                        copy.deepcopy(pe_models[-1])
+                                    )
+                                    base_models.append(
+                                        copy.deepcopy(fc_models[-1])
+                                    )
+                                    
+                                    base_models[0].to('meta')
+                                    base_models[1].to('meta')
 
                         # ###################################
                         # # measure trainable params in total
@@ -182,8 +195,11 @@ if __name__ == "__main__":
         # dynamically add vmap
         with performance_measure(f"add vmap"):
             if cfg.training_strategy == "vmap" and update_vmap_model == True:
-                fc_model, fc_param, fc_buffer = utils.update_vmap(fc_models, optimiser)
-                pe_model, pe_param, pe_buffer = utils.update_vmap(pe_models, optimiser)
+                # fc_model, fc_param, fc_buffer = utils.update_vmap(fc_models, optimiser)
+                # pe_model, pe_param, pe_buffer = utils.update_vmap(pe_models, optimiser)
+                fc_param, fc_buffer = utils.update_vmap(fc_models, optimiser)
+                pe_param, pe_buffer = utils.update_vmap(pe_models, optimiser)
+
                 update_vmap_model = False
 
 
@@ -294,9 +310,14 @@ if __name__ == "__main__":
                     batch_color = torch.stack(batch_color)
                 elif cfg.training_strategy == "vmap":
                     # batched training
-                    batch_embedding = vmap(pe_model)(pe_param, pe_buffer, batch_input_pcs)
-                    batch_alpha, batch_color = vmap(fc_model)(fc_param, fc_buffer, batch_embedding)
+                    def csm0(p, b, d):
+                        return torch.func.functional_call(base_models[0], (p,b), (d,))
+                    def csm1(p, b, d):
+                        return torch.func.functional_call(base_models[1], (p,b), (d,))
+                    batch_embedding = torch.vmap(csm0)(pe_param, pe_buffer, batch_input_pcs)
+                    batch_alpha, batch_color = torch.vmap(csm1)(fc_param, fc_buffer, batch_embedding)
                     # print("batch alpha ", batch_alpha.shape)
+                    # pdb.set_trace()
                 else:
                     print("training strategy {} is not implemented ".format(cfg.training_strategy))
                     exit(-1)
@@ -309,6 +330,7 @@ if __name__ == "__main__":
                                      batch_obj_mask.detach(), batch_depth_mask.detach(),
                                      batch_sampled_z.detach())
 
+            with performance_measure("Background forward"):
                 if cfg.do_bg:
                     bg_data_idx = slice(iter_step * n_sample_per_step_bg, (iter_step + 1) * n_sample_per_step_bg)
                     bg_embedding = scene_bg.trainer.pe(bg_input_pcs[bg_data_idx, ...])
@@ -319,7 +341,7 @@ if __name__ == "__main__":
                                                      bg_sampled_z[None, bg_data_idx, ...].detach())
                     batch_loss += bg_loss
 
-            # with performance_measure(f"Backward"):
+            with performance_measure(f"Backward"):
                 if AMP:
                     scaler.scale(batch_loss).backward()
                     scaler.step(optimiser)
@@ -336,14 +358,16 @@ if __name__ == "__main__":
             if cfg.training_strategy == "vmap":
                 with torch.no_grad():
                     for model_id, (obj_id, obj_k) in enumerate(obj_dict.items()):
+                        fcpr = tuple(fc_param.values())
+                        pepr = tuple(pe_param.values())
                         for i, param in enumerate(obj_k.trainer.fc_occ_map.parameters()):
-                            param.copy_(fc_param[i][model_id])
+                            param.copy_(fcpr[i][model_id])
                         for i, param in enumerate(obj_k.trainer.pe.parameters()):
-                            param.copy_(pe_param[i][model_id])
+                            param.copy_(pepr[i][model_id])
 
 
         ####################################################################
-        # live vis mesh
+        # process mesh
         if (((frame_id % cfg.n_vis_iter) == 0 or frame_id == dataset_len-1) or
             (cfg.live_mode and time.time()-last_frame_time>cfg.keep_live_time)) and frame_id >= 10:
             if not args.no_vis:
@@ -365,8 +389,8 @@ if __name__ == "__main__":
                 mesh.export(os.path.join(obj_mesh_output, "frame_{}_obj{}.obj".format(frame_id, str(obj_id))))
 
                 # live vis
-                open3d_mesh = vis.trimesh_to_open3d(mesh)
                 if not args.no_vis:
+                    open3d_mesh = vis.trimesh_to_open3d(mesh)
                     vis3d.add_geometry(open3d_mesh)
                     vis3d.add_geometry(bound)
                     # update vis3d
