@@ -11,6 +11,8 @@ import image_transforms
 import open3d
 import time
 
+from pose_synthesis.pose_synthesis_batch import main as pose_synthesis_main
+
 SAV_PATH = '/home/wdebang/hdd/vmap/segmented/'
 
 def next_live_data(track_to_map_IDT, inited):
