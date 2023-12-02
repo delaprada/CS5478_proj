@@ -10,7 +10,7 @@ def marching_cubes(occupancy, level=0.5):
     except (RuntimeError, ValueError):
        return None
 
-    dim = occupancy.shape[0]
+    dim = np.array(occupancy.shape)
     vertices = vertices / (dim - 1)
     mesh = trimesh.Trimesh(vertices=vertices,
                            vertex_normals=vertex_normals,

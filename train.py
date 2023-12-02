@@ -368,34 +368,44 @@ if __name__ == "__main__":
 
         ####################################################################
         # process mesh
-        if (((frame_id % cfg.n_vis_iter) == 0 or frame_id == dataset_len-1) or
-            (cfg.live_mode and time.time()-last_frame_time>cfg.keep_live_time)) and frame_id >= 10:
-            if not args.no_vis:
-                vis3d.clear_geometries()
-            for obj_id, obj_k in vis_dict.items():
-                bound = obj_k.get_bound(intrinsic_open3d)
-                if bound is None:
-                    print("get bound failed obj ", obj_id)
-                    continue
-                adaptive_grid_dim = int(np.minimum(np.max(bound.extent)//cfg.live_voxel_size+1, cfg.grid_dim))
-                mesh = obj_k.trainer.meshing(bound, obj_k.obj_center, grid_dim=adaptive_grid_dim)
-                if mesh is None:
-                    print("meshing failed obj ", obj_id)
-                    continue
-
-                # save to dir
-                obj_mesh_output = os.path.join(log_dir, "scene_mesh")
-                os.makedirs(obj_mesh_output, exist_ok=True)
-                mesh.export(os.path.join(obj_mesh_output, "frame_{}_obj{}.obj".format(frame_id, str(obj_id))))
-
-                # live vis
+        with performance_measure("Exporting mesh"):
+            if (((frame_id % cfg.n_vis_iter) == 0 or frame_id == dataset_len-1) or
+                (cfg.live_mode and time.time()-last_frame_time>cfg.keep_live_time)) and frame_id >= 10:
                 if not args.no_vis:
-                    open3d_mesh = vis.trimesh_to_open3d(mesh)
-                    vis3d.add_geometry(open3d_mesh)
-                    vis3d.add_geometry(bound)
-                    # update vis3d
-                    vis3d.poll_events()
-                    vis3d.update_renderer()
+                    vis3d.clear_geometries()
+                for obj_id, obj_k in tqdm(vis_dict.items()):
+                    with performance_measure("get bound"):
+                        bound = obj_k.get_bound(intrinsic_open3d)
+                    if bound is None:
+                        print("get bound failed obj ", obj_id)
+                        continue
+                    if obj_id == 0:
+                        grid_dim = 256
+                    else:
+                        grid_dim = cfg.grid_dim
+                    adaptive_grid_dims = np.minimum(
+                        bound.extent // cfg.live_voxel_size + 1, 
+                        grid_dim
+                    ).astype(np.int32)
+                    print(f'Exporting mesh obj {obj_id}, grid_dim={adaptive_grid_dims}' + "~"*20)
+                    mesh = obj_k.trainer.meshing(bound, obj_k.obj_center, grid_dims=adaptive_grid_dims)
+                    if mesh is None:
+                        print("meshing failed obj ", obj_id)
+                        continue
+
+                    # save to dir
+                    obj_mesh_output = os.path.join(log_dir, "scene_mesh")
+                    os.makedirs(obj_mesh_output, exist_ok=True)
+                    mesh.export(os.path.join(obj_mesh_output, "frame_{}_obj{}.obj".format(frame_id, str(obj_id))))
+
+                    # live vis
+                    if not args.no_vis:
+                        open3d_mesh = vis.trimesh_to_open3d(mesh)
+                        vis3d.add_geometry(open3d_mesh)
+                        vis3d.add_geometry(bound)
+                        # update vis3d
+                        vis3d.poll_events()
+                        vis3d.update_renderer()
 
         if False:    # follow cam
             cam = view_ctl.convert_to_pinhole_camera_parameters()
@@ -411,11 +421,10 @@ if __name__ == "__main__":
                 for obj_id, obj_k in vis_dict.items():
                     ckpt_dir = os.path.join(log_dir, "ckpt", str(obj_id))
                     os.makedirs(ckpt_dir, exist_ok=True)
-                    bound = obj_k.get_bound(intrinsic_open3d)   # update bound
+                    # bound = obj_k.get_bound(intrinsic_open3d)   # just updated bound above
                     obj_k.save_checkpoints(ckpt_dir, frame_id)
                 # save current cam pose
                 cam_dir = os.path.join(log_dir, "cam_pose")
                 os.makedirs(cam_dir, exist_ok=True)
                 torch.save({"twc": twc,}, os.path.join(cam_dir, "twc_frame_{}".format(frame_id) + ".pth"))
-
 

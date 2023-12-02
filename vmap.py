@@ -3,14 +3,13 @@ import numpy as np
 import torch
 from time import perf_counter_ns
 from tqdm import tqdm
-import trainer
 import open3d
 import trimesh
 import scipy
 from bidict import bidict
 import copy
 import os
-
+import pdb
 import utils
 
 
@@ -25,8 +24,21 @@ class performance_measure:
     def __exit__(self, type, value, tb):
         self.end_time = perf_counter_ns()
         self.exec_time = self.end_time - self.start_time
-
-        print(f"{self.name} excution time: {(self.exec_time)/1000000:.2f} ms")
+        self.exec_time = self.exec_time / 1000000
+        
+        if self.exec_time < 1000:
+            print(f"{self.name} excution time: {self.exec_time:.2f} ms")
+            return
+        
+        self.exec_time /= 1000
+        if self.exec_time < 60:
+            print(f"{self.name} excution time: {self.exec_time:.2f} s")
+            return
+        
+        self.exec_time /= 60
+        print(f"{self.name} excution time: {self.exec_time:.2f} min")
+        
+import trainer
 
 def origin_dirs_W(T_WC, dirs_C):
 
@@ -93,16 +105,19 @@ class sceneObject:
     updating keyframes, get training samples, optimizing MLP map
     """
 
-    def __init__(self, cfg, obj_id, rgb:torch.tensor, depth:torch.tensor, mask:torch.tensor, bbox_2d:torch.tensor, t_wc:torch.tensor, live_frame_id) -> None:
+    def __init__(self, 
+                 cfg,
+                 obj_id, 
+                 rgb:torch.tensor = None, 
+                 depth:torch.tensor = None, 
+                 mask:torch.tensor = None, 
+                 bbox_2d:torch.tensor = None, 
+                 t_wc:torch.tensor = None, 
+                 live_frame_id = None) -> None:
         self.do_bg = cfg.do_bg
         self.obj_id = obj_id
         self.data_device = cfg.data_device
         self.training_device = cfg.training_device
-
-        assert rgb.shape[:2] == depth.shape
-        assert rgb.shape[:2] == mask.shape
-        assert bbox_2d.shape == (4,)
-        assert t_wc.shape == (4, 4,)
 
         if self.do_bg and self.obj_id == 0: # do seperate bg
             self.obj_scale = cfg.bg_scale
@@ -115,8 +130,15 @@ class sceneObject:
             self.n_bins_cam2surface = cfg.n_bins_cam2surface
             self.keyframe_step = cfg.keyframe_step
 
-        self.frames_width = rgb.shape[0]
-        self.frames_height = rgb.shape[1]
+        if rgb is not None:
+            
+            assert rgb.shape[:2] == depth.shape
+            assert rgb.shape[:2] == mask.shape
+            assert bbox_2d.shape == (4,)
+            assert t_wc.shape == (4, 4,)
+
+            self.frames_width = rgb.shape[0]
+            self.frames_height = rgb.shape[1]
 
         self.min_bound = cfg.min_depth
         self.max_bound = cfg.max_depth
@@ -134,46 +156,47 @@ class sceneObject:
         self.frame_cnt = 0  # number of frames taken in
         self.lastest_kf_queue = []
 
-        self.bbox = torch.empty(  # obj bounding bounding box in the frame
-            self.keyframe_buffer_size,
-            4,
-            device=self.data_device)  # [u low, u high, v low, v high]
-        self.bbox[0] = bbox_2d
 
         # RGB + pixel state batch
-        self.rgb_idx = slice(0, 3)
-        self.state_idx = slice(3, 4)
-        self.rgbs_batch = torch.empty(self.keyframe_buffer_size,
-                                      self.frames_width,
-                                      self.frames_height,
-                                      4,
-                                      dtype=torch.uint8,
-                                      device=self.data_device)
+        if rgb is not None:
+            self.bbox = torch.empty(  # obj bounding bounding box in the frame
+                self.keyframe_buffer_size,
+                4,
+                device=self.data_device)  # [u low, u high, v low, v high]
+            self.bbox[0] = bbox_2d
+            self.rgb_idx = slice(0, 3)
+            self.state_idx = slice(3, 4)
+            self.rgbs_batch = torch.empty(self.keyframe_buffer_size,
+                                        self.frames_width,
+                                        self.frames_height,
+                                        4,
+                                        dtype=torch.uint8,
+                                        device=self.data_device)
 
-        # Pixel states:
-        self.other_obj = 0  # pixel doesn't belong to obj
-        self.this_obj = 1  # pixel belong to obj 
-        self.unknown_obj = 2  # pixel state is unknown
+            # Pixel states:
+            self.other_obj = 0  # pixel doesn't belong to obj
+            self.this_obj = 1  # pixel belong to obj 
+            self.unknown_obj = 2  # pixel state is unknown
 
-        # Initialize first frame rgb and pixel state
-        self.rgbs_batch[0, :, :, self.rgb_idx] = rgb
-        self.rgbs_batch[0, :, :, self.state_idx] = mask[..., None]
+            # Initialize first frame rgb and pixel state
+            self.rgbs_batch[0, :, :, self.rgb_idx] = rgb
+            self.rgbs_batch[0, :, :, self.state_idx] = mask[..., None]
 
-        self.depth_batch = torch.empty(self.keyframe_buffer_size,
-                                       self.frames_width,
-                                       self.frames_height,
-                                       dtype=torch.float32,
-                                       device=self.data_device)
+            self.depth_batch = torch.empty(self.keyframe_buffer_size,
+                                        self.frames_width,
+                                        self.frames_height,
+                                        dtype=torch.float32,
+                                        device=self.data_device)
 
-        # Initialize first frame's depth 
-        self.depth_batch[0] = depth
-        self.t_wc_batch = torch.empty(
-            self.keyframe_buffer_size, 4, 4,
-            dtype=torch.float32,
-            device=self.data_device)  # world to camera transform
+            # Initialize first frame's depth 
+            self.depth_batch[0] = depth
+            self.t_wc_batch = torch.empty(
+                self.keyframe_buffer_size, 4, 4,
+                dtype=torch.float32,
+                device=self.data_device)  # world to camera transform
 
-        # Initialize first frame's world2cam transform
-        self.t_wc_batch[0] = t_wc
+            # Initialize first frame's world2cam transform
+            self.t_wc_batch[0] = t_wc
 
         # neural field map
         trainer_cfg = copy.deepcopy(cfg)
@@ -360,7 +383,7 @@ class sceneObject:
         sampled_twc = self.t_wc_batch[keyframe_ids[:, 0], :, :]
 
         origins, dirs_w = origin_dirs_W(sampled_twc, sampled_ray_dirs)
-
+        # pdb.set_trace()
         return self.sample_3d_points(sampled_rgbs, sampled_depth, origins, dirs_w)
 
     def sample_3d_points(self, sampled_rgbs, sampled_depth, origins, dirs_w):
@@ -513,7 +536,7 @@ class cameraInfo:
 
         dirs[:, :, 0] = ((idx_w - self.cx) / self.fx)[:, None]
         dirs[:, :, 1] = ((idx_h - self.cy) / self.fy)
-
+        # pdb.set_trace()
         if depth_type == "euclidean":
             raise Exception(
                 "Get camera rays directions with euclidean depth not yet implemented"

@@ -1,5 +1,6 @@
 import torch
 import numpy as np
+import pdb
 
 def occupancy_activation(alpha, distances=None):
     # occ = 1.0 - torch.exp(-alpha * distances)
@@ -95,15 +96,14 @@ def reduce_batch_loss(loss_mat, var=None, avg=True, mask=None, loss_type="L1"):
 
     return loss
 
-def make_3D_grid(occ_range=[-1., 1.], dim=256, device="cuda:0", transform=None, scale=None):
-    t = torch.linspace(occ_range[0], occ_range[1], steps=dim, device=device)
-    grid = torch.meshgrid(t, t, t)
+def make_3D_grid(occ_range=[-1., 1.], dims=(256,256,256), device="cuda:0", transform=None, scale=None):
+    ts = [torch.linspace(occ_range[0], occ_range[1], steps=dim, device=device) for dim in dims]
+    grid = torch.meshgrid(ts[0], ts[1], ts[2])
     grid_3d = torch.cat(
         (grid[0][..., None],
          grid[1][..., None],
          grid[2][..., None]), dim=3
     )
-
     if scale is not None:
         grid_3d = grid_3d * scale
     if transform is not None:
